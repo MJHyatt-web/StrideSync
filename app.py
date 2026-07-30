@@ -2,7 +2,8 @@
 import pandas as pd
 import streamlit as st
 import spotipy
-from spotipy.oauth2 import SpotifyPKCE
+from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 
 st.set_page_config(page_title="StrideSync", page_icon="🏃", layout="wide")
 st.title("🏃 StrideSync")
@@ -27,8 +28,7 @@ workout_rules = {
     "Easy": {"minimum_energy": 0.45, "maximum_energy": 0.75, "minimum_tempo": 90, "maximum_tempo": 140},
     "Tempo": {"minimum_energy": 0.60, "maximum_energy": 0.90, "minimum_tempo": 110, "maximum_tempo": 160},
     "Interval": {"minimum_energy": 0.70, "maximum_energy": 1.00, "minimum_tempo": 120, "maximum_tempo": 180},
-    "Race": {"minimum_energy": 0.75, "maximum_energy": 1.00, "minimum_tempo": 125, "maximum_tempo": 190}
-}
+    "Race": {"minimum_energy": 0.75, "maximum_energy": 1.00, "minimum_tempo": 125, "maximum_tempo": 190}}
 
 # SONG-SELECTION FUNCTION
 
@@ -53,12 +53,42 @@ def select_songs_for_phase(song_pool, target_minutes, used_tracks):
 # SPOTIFY CONNECTION FUNCTION
 
 def connect_to_spotify():
-    client_id = st.secrets["SPOTIFY_CLIENT_ID"]
-    redirect_uri = "http://127.0.0.1:9090/callback"
-    scope = "playlist-read-private playlist-modify-private playlist-modify-public"
-    auth_manager = SpotifyPKCE(client_id=client_id, redirect_uri=redirect_uri, scope=scope, open_browser=True, cache_path=".spotify_cache")
-    spotify = spotipy.Spotify(auth_manager=auth_manager)
-    return spotify
+
+    if "spotify_cache" not in st.session_state:
+        st.session_state.spotify_cache = MemoryCacheHandler()
+
+    spotify_auth = SpotifyOAuth(
+        client_id=st.secrets["SPOTIFY_CLIENT_ID"],
+        client_secret=st.secrets["SPOTIFY_CLIENT_SECRET"],
+        redirect_uri="https://stridesync-mitch.streamlit.app/",
+        scope="playlist-modify-private playlist-modify-public",
+        cache_handler=st.session_state.spotify_cache,
+        open_browser=False
+    )
+
+    token_info = spotify_auth.validate_token(
+        st.session_state.spotify_cache.get_cached_token()
+    )
+
+    if token_info:
+        return spotipy.Spotify(auth=token_info["access_token"])
+
+    if "code" in st.query_params:
+
+        token_info = spotify_auth.get_access_token(
+            st.query_params["code"],
+            check_cache=False
+        )
+
+        st.query_params.clear()
+        st.rerun()
+
+    st.link_button(
+        "Connect to Spotify",
+        spotify_auth.get_authorize_url()
+    )
+
+    return None
 
 # GENRE OPTIONS
 
@@ -169,20 +199,50 @@ if "generated_playlist" in st.session_state:
 
     st.download_button(label="Download Playlist CSV", data=csv_file, file_name="generated_running_playlist.csv", mime="text/csv")
 
-    if st.button("Send Playlist to Spotify"):
+
+# Connect to Spotify
+if "generated_playlist" in st.session_state:
+
+    spotify = connect_to_spotify()
+
+    if spotify is not None:
+
         try:
-            spotify = connect_to_spotify()
             user = spotify.current_user()
-            track_uris = []
 
-            for track_id in generated_playlist["track_id"]:
-                track_uris.append("spotify:track:" + str(track_id))
+            st.success("Connected to Spotify as " + user["display_name"])
 
-            playlist_name = st.session_state["workout_type"] + " Run - " + st.session_state["genre_choice"]
-            new_playlist = spotify.user_playlist_create(user=user["id"], name=playlist_name, public=False, description="Running playlist created using StrideSync and RunScore V2")
-            spotify.playlist_add_items(new_playlist["id"], track_uris)
+            if st.button("Send Playlist to Spotify"):
 
-            st.success(playlist_name + " was successfully added to Spotify!")
+                generated_playlist = st.session_state["generated_playlist"]
+
+                track_uris = []
+
+                for track_id in generated_playlist["track_id"]:
+                    track_uris.append("spotify:track:" + str(track_id))
+
+                playlist_name = (
+                    st.session_state["workout_type"]
+                    + " Run - "
+                    + st.session_state["genre_choice"]
+                )
+
+                new_playlist = spotify.user_playlist_create(
+                    user=user["id"],
+                    name=playlist_name,
+                    public=False,
+                    description="Running playlist created using StrideSync"
+                )
+
+                spotify.playlist_add_items(
+                    new_playlist["id"],
+                    track_uris
+                )
+
+                st.success(
+                    playlist_name
+                    + " was successfully added to Spotify!"
+                )
 
         except Exception as error:
             st.error("Spotify connection failed.")
