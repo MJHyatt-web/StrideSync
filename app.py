@@ -53,7 +53,7 @@ def select_songs_for_phase(song_pool, target_minutes, used_tracks):
 # SPOTIFY CONNECTION FUNCTION
 
 def connect_to_spotify():
-    client_id = open("spotify_key.txt", "r").read().strip()
+    client_id = st.secrets["SPOTIFY_CLIENT_ID"]
     redirect_uri = "http://127.0.0.1:9090/callback"
     scope = "playlist-read-private playlist-modify-private playlist-modify-public"
     auth_manager = SpotifyPKCE(client_id=client_id, redirect_uri=redirect_uri, scope=scope, open_browser=True, cache_path=".spotify_cache")
